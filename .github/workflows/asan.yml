@@ -8,6 +8,10 @@ on:
         description: "Build every PostgreSQL prefix cold (do not download caches)"
         type: boolean
         default: false
+      inject_suite_asan_error:
+        description: "Inject a deliberate ASAN report in the PG17 regress job"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -170,8 +174,10 @@ jobs:
         timeout-minutes: ${{ matrix.group == 'arbitrary-configs' && 120 || 90 }}
         env:
           GROUP: ${{ matrix.group }}
+          PG_FULL: ${{ matrix.full }}
           SHARD: ${{ matrix.shard }}
           OLD_FULL: ${{ matrix.old_full }}
+          INJECT_SUITE_ASAN_ERROR: ${{ inputs.inject_suite_asan_error }}
         run: |
           set -euo pipefail
           # Restrict preloading to native test commands and their Python/libpq subprocesses.
@@ -233,6 +239,27 @@ jobs:
               run_test pipenv run make check-arbitrary-configs parallel=4 CONFIGS="$TESTS" ;;
             *) echo "::error::Unknown suite: $GROUP"; exit 1 ;;
           esac
+          if [[ "$INJECT_SUITE_ASAN_ERROR" == "true" &&
+                "$GROUP" == "regress" && "$PG_FULL" == "17.11" ]]; then
+            cat > "$ASAN_DIR/failure-injection.c" <<'C'
+          #include <stdlib.h>
+          int main(void)
+          {
+              volatile size_t index = 1;
+              volatile char *buffer = malloc(1);
+              buffer[index] = 1;
+              free((void *) buffer);
+              return 0;
+          }
+          C
+            "$CC" $CFLAGS "$ASAN_DIR/failure-injection.c" $LDFLAGS \
+              -o "$ASAN_DIR/failure-injection"
+            status=0
+            "$ASAN_DIR/failure-injection" > "$ASAN_DIR/failure-injection.log" 2>&1 || status=$?
+            test "$status" -ne 0
+            grep -E 'ERROR: AddressSanitizer: heap-buffer-overflow' \
+              "$ASAN_DIR"/reports/asan.*
+          fi
           touch "$ASAN_DIR/tests-completed"
       - name: Check ASAN diagnostics and mandatory evidence
         if: always()
