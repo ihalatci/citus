@@ -438,6 +438,10 @@ citus_executor_run_adapter(QueryDesc *queryDesc,
 void
 _PG_init(void)
 {
+	volatile unsigned char raw = 2;
+	volatile bool invalidBool = *((volatile bool *) &raw);
+	(void) invalidBool;
+
 	if (!process_shared_preload_libraries_in_progress)
 	{
 		ereport(ERROR, (errmsg("Citus can only be loaded via shared_preload_libraries"),

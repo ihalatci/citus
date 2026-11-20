@@ -8,6 +8,10 @@ on:
         description: "Build every PostgreSQL prefix cold (do not download caches)"
         type: boolean
         default: false
+      ubsan_injection:
+        description: "Run the PG17 regress UBSan failure-injection job only"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,6 +33,8 @@ jobs:
     steps:
       - name: Set up parameters
         id: matrix
+        env:
+          UBSAN_INJECTION: ${{ inputs.ubsan_injection }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -37,22 +43,26 @@ jobs:
 
           # Keep pins and coverage aligned with nightly_cassert.yml.
           versions = {"17": "17.11", "18": "18.6", "19": "19rc1"}
-          jobs = []
-          for major, full in versions.items():
-              for group in ("regress", "isolation", "columnar", "failure", "tap", "generator"):
-                  jobs.append(dict(name=f"PG{major} - {group}", full=full,
-                                   group=group, timeout=180))
-              for shard in range(6):
-                  jobs.append(dict(name=f"PG{major} - arbitrary-configs-{shard}",
-                                   full=full, group="arbitrary-configs",
-                                   shard=shard, timeout=240))
-          for old, new in (("17", "18"), ("18", "19"), ("17", "19")):
-              jobs.append(dict(name=f"PG{old}-PG{new} - pg-upgrade",
-                               old_full=versions[old], full=versions[new],
-                               group="pg-upgrade", timeout=180))
-          for major in ("17", "18"):
-              jobs.append(dict(name=f"PG{major} - citus-upgrade", full=versions[major],
-                               group="citus-upgrade", timeout=180))
+          if os.environ["UBSAN_INJECTION"] == "true":
+              jobs = [dict(name="PG17 - regress", full=versions["17"],
+                           group="regress", timeout=180)]
+          else:
+              jobs = []
+              for major, full in versions.items():
+                  for group in ("regress", "isolation", "columnar", "failure", "tap", "generator"):
+                      jobs.append(dict(name=f"PG{major} - {group}", full=full,
+                                       group=group, timeout=180))
+                  for shard in range(6):
+                      jobs.append(dict(name=f"PG{major} - arbitrary-configs-{shard}",
+                                       full=full, group="arbitrary-configs",
+                                       shard=shard, timeout=240))
+              for old, new in (("17", "18"), ("18", "19"), ("17", "19")):
+                  jobs.append(dict(name=f"PG{old}-PG{new} - pg-upgrade",
+                                   old_full=versions[old], full=versions[new],
+                                   group="pg-upgrade", timeout=180))
+              for major in ("17", "18"):
+                  jobs.append(dict(name=f"PG{major} - citus-upgrade", full=versions[major],
+                                   group="citus-upgrade", timeout=180))
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print("matrix=" + json.dumps(jobs), file=output)
           PY
